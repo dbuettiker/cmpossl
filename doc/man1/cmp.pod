@@ -796,21 +796,28 @@ See the L<verify(1)> manual page for details.
 
 =head1 EXAMPLES
 
+Note:
+when using CMP for the first time and experimenting with enrollment options
+it typically happens that errors occur until the configuration is correct.
+When the server side reports an error via CMP the client will by default
+check the protection of the response message. Yet there are CMP services
+based on EJBCA, which tends not to protect negative responses. In this case
+the client will reject such error responses and their contents are not shown
+although they usually contain hints that would be helpful for debugging.
+In order to support debugging the setup the CMP client offers a workaround
+via the B<-unprotectederrors> option, which allows accepting such messages.
+
 Note: in these examples the C<\> at line ends means
 the invocation should be all on one line.
 
-Requesting "all relevant information" with an empty General Message.
-This prints information about all received ITAV B<infoType>s to stdout.
+=head2 Certificate enrollment
 
-  openssl cmp -cmd genm -server 127.0.0.1:8080 -path pkix/ \
-    -ref 1234 -secret pass:1234-5678-1234-5678 \
-    -recipient "/CN=CMPserver"
-
-Sending an initial request message to a CMP server running on the local
-host, using a pre-shared secret key for authentication. In this example
-the client does not have the CA certificate yet, so we specify the CA's
-name with B<-recipient> and save any CA certificates that we may receive
-in the  C<capubs.pem> file.
+For enrolling its very first certificate the client generates a first client key
+and sends an initial request message to a CMP server running on the local host,
+using a pre-shared secret key for mutual authentication. In this example the
+client does not have the CA certificate yet, so we specify the name of the CA
+with the B<-recipient> option and save any CA certificates that we may receive
+in the C<capubs.pem> file.
 
   openssl genrsa -out cl_key.pem
   openssl cmp -cmd ir -server 127.0.0.1:8080 -path pkix/ \
@@ -819,15 +826,69 @@ in the  C<capubs.pem> file.
     -newkey cl_key.pem -subject "/CN=MyName" \
     -cacertsout capubs.pem -certout cl_cert.pem
 
-Then, when the keys for this certificate need to be updated, the client
-can send a key update request.
+=head2 Certificate update
+
+Then, when the client certificate and its related key pair needs to be updated,
+the client can send a key update request taking the certs in C<capubs.pem>
+as trusted for authenticating the server and using the previous cert and key
+for its own authentication. Then it can start using the new cert and key.
 
   openssl genrsa -out cl_key_new.pem
   openssl cmp -cmd kur -server 127.0.0.1:8080 -path pkix/ \
-    -cert cl_cert.pem -key cl_key.pem \
-    -recipient "/CN=CMPserver" \
     -trusted capubs.pem \
-    -newkey cl_key_new.pem -certout cl_cert_new.pem
+    -cert cl_cert.pem -key cl_key.pem \
+    -newkey cl_key_new.pem -certout cl_cert.pem
+  cp cl_key_new.pem cl_key.pem
+
+This command sequence can be repated as often as needed.
+
+=head2 Using a configuration file
+
+For CMP client invocations, in particular for certificate enrollment,
+usually many parameters need to be set, which is tedious and error-prone to do
+on the command line. Therefore the client also offers the possibility to read
+options from sections of the OpenSSL config file, usually called B<openssl.cnf>.
+The values found there can still be extended and even overridden by any
+subsequently loaded sections and on the command line.
+
+After including in the configuration file the following sections:
+
+  [cmp]
+  server = 127.0.0.1:8080
+  path = pkix/
+  trusted = capubs.pem
+  cert = cl_cert.pem
+  key = cl_key.pem
+  newkey = cl_key.pem
+  certout = cl_cert.pem
+
+  [cmp-init]
+  recipient = "/CN=CMPserver"
+  trusted =
+  cert =
+  key =
+  ref = 1234
+  secret = pass:1234-5678-1234-567
+  subject = "/CN=MyName"
+  cacertsout = capubs.pem
+
+the above enrollment invocations reduce to
+
+  openssl cmp -section cmp,cmp-init
+  openssl cmp -cmd kur -newkey cl_key_new.pem
+
+=head2 Requesting information from CMP server
+
+Requesting "all relevant information" with an empty General Message.
+This prints information about all received ITAV B<infoType>s to stdout.
+
+  openssl cmp -cmd genm -server 127.0.0.1:8080 -path pkix/ \
+    -ref 1234 -secret pass:1234-5678-1234-5678 \
+    -recipient "/CN=CMPserver"
+
+Making use of the configuration file sectins given above, this call reduces to
+
+  openssl cmp -section cmp,cmp-init -cmd genm
 
 =head1 SEE ALSO
 
