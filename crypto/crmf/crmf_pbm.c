@@ -108,28 +108,27 @@ OSSL_CRMF_PBMPARAMETER *OSSL_CRMF_pbmp_new(size_t slen, int owfnid,
 
 /*
  * calculates the PBM based on the settings of the given OSSL_CRMF_PBMPARAMETER
- * @pbm identifies the algorithms to use
+ * @pbmp identifies the algorithms, salt to use
  * @msg message to apply the PBM for
- * @msgLen length of the message
- * @secret key to use
- * @secretLen length of the key
+ * @msglen length of the message
+ * @sec key to use
+ * @seclen length of the key
  * @mac pointer to the computed mac, is allocated here, will be freed if not
  *              pointing to NULL
- * @macLen pointer to the length of the mac, will be set
+ * @maclen pointer to the length of the mac, will be set
  *
  * returns 1 at success, 0 at error
  */
-int OSSL_CRMF_passwordBasedMac_new(const OSSL_CRMF_PBMPARAMETER *pbm,
-                                   const unsigned char *msg, size_t msgLen,
-                                   const unsigned char *secret,
-                                   size_t secretLen,
-                                   unsigned char **mac, unsigned int *macLen)
+int OSSL_CRMF_pbm_new(const OSSL_CRMF_PBMPARAMETER *pbmp,
+                      const unsigned char *msg, size_t msglen,
+                      const unsigned char *sec, size_t seclen,
+                      unsigned char **mac, unsigned int *maclen)
 {
     int mac_nid, hmac_md_nid = NID_undef;
     const EVP_MD *m = NULL;
     EVP_MD_CTX *ctx = NULL;
     unsigned char basekey[EVP_MAX_MD_SIZE];
-    unsigned int basekeyLen;
+    unsigned int bklen;
 #if OPENSSL_VERSION_NUMBER > 0x10100000L
     uint64_t
 #else
@@ -138,8 +137,8 @@ int OSSL_CRMF_passwordBasedMac_new(const OSSL_CRMF_PBMPARAMETER *pbm,
          iterations;
     int error = CRMF_R_CRMFERROR;
 
-    if (mac == NULL || pbm == NULL || pbm->mac == NULL ||
-            pbm->mac->algorithm == NULL || msg == NULL || secret == NULL) {
+    if (mac == NULL || pbmp == NULL || pbmp->mac == NULL ||
+            pbmp->mac->algorithm == NULL || msg == NULL || sec == NULL) {
         error = CRMF_R_NULL_ARGUMENT;
         goto err;
     }
@@ -154,7 +153,7 @@ int OSSL_CRMF_passwordBasedMac_new(const OSSL_CRMF_PBMPARAMETER *pbm,
      * compute the key used in the MAC process.  All implementations MUST
      * support SHA-1.
      */
-    if ((m = EVP_get_digestbyobj(pbm->owf->algorithm)) == NULL) {
+    if ((m = EVP_get_digestbyobj(pbmp->owf->algorithm)) == NULL) {
         error = CRMF_R_UNSUPPORTED_ALGORITHM;
         goto err;
     }
@@ -168,19 +167,19 @@ int OSSL_CRMF_passwordBasedMac_new(const OSSL_CRMF_PBMPARAMETER *pbm,
     if (!(EVP_DigestInit_ex(ctx, m, NULL)))
         goto err;
     /* first the secret */
-    if (!EVP_DigestUpdate(ctx, secret, secretLen))
+    if (!EVP_DigestUpdate(ctx, sec, seclen))
         goto err;
     /* then the salt */
-    if (!EVP_DigestUpdate(ctx, pbm->salt->data, pbm->salt->length))
+    if (!EVP_DigestUpdate(ctx, pbmp->salt->data, pbmp->salt->length))
         goto err;
-    if (!(EVP_DigestFinal_ex(ctx, basekey, &basekeyLen)))
+    if (!(EVP_DigestFinal_ex(ctx, basekey, &bklen)))
         goto err;
     if (
 #if OPENSSL_VERSION_NUMBER > 0x10100000L
-        !ASN1_INTEGER_get_uint64(&iterations, pbm->iterationCount)
+        !ASN1_INTEGER_get_uint64(&iterations, pbmp->iterationCount)
 #else
-        ASN1_INTEGER_get(pbm->iterationCount) < 0 ||
-        !(iterations = ASN1_INTEGER_get(pbm->iterationCount))
+        ASN1_INTEGER_get(pbmp->iterationCount) < 0 ||
+        !(iterations = ASN1_INTEGER_get(pbmp->iterationCount))
 #endif
             || iterations < 100 /* min from RFC */
             || iterations > OSSL_CRMF_PBM_MAX_ITERATION_COUNT) {
@@ -192,9 +191,9 @@ int OSSL_CRMF_passwordBasedMac_new(const OSSL_CRMF_PBMPARAMETER *pbm,
     while (--iterations > 0) {
         if (!(EVP_DigestInit_ex(ctx, m, NULL)))
             goto err;
-        if (!EVP_DigestUpdate(ctx, basekey, basekeyLen))
+        if (!EVP_DigestUpdate(ctx, basekey, bklen))
             goto err;
-        if (!(EVP_DigestFinal_ex(ctx, basekey, &basekeyLen)))
+        if (!(EVP_DigestFinal_ex(ctx, basekey, &bklen)))
             goto err;
     }
 
@@ -204,7 +203,7 @@ int OSSL_CRMF_passwordBasedMac_new(const OSSL_CRMF_PBMPARAMETER *pbm,
      * [HMAC].      All implementations SHOULD support DES-MAC and Triple-
      * DES-MAC [PKCS11].
      */
-    mac_nid = OBJ_obj2nid(pbm->mac->algorithm);
+    mac_nid = OBJ_obj2nid(pbmp->mac->algorithm);
 
 #if OPENSSL_VERSION_NUMBER < 0x10101000L
     /*
@@ -229,10 +228,10 @@ int OSSL_CRMF_passwordBasedMac_new(const OSSL_CRMF_PBMPARAMETER *pbm,
         error = CRMF_R_UNSUPPORTED_ALGORITHM;
         goto err;
     }
-    HMAC(m, basekey, basekeyLen, msg, msgLen, *mac, macLen);
+    HMAC(m, basekey, bklen, msg, msglen, *mac, maclen);
 
     /* cleanup */
-    OPENSSL_cleanse(basekey, basekeyLen);
+    OPENSSL_cleanse(basekey, bklen);
     EVP_MD_CTX_destroy(ctx);
 
     return 1;
@@ -241,10 +240,10 @@ int OSSL_CRMF_passwordBasedMac_new(const OSSL_CRMF_PBMPARAMETER *pbm,
         OPENSSL_free(*mac);
         *mac = NULL;
     }
-    CRMFerr(CRMF_F_OSSL_CRMF_PASSWORDBASEDMAC_NEW, error);
-    if (pbm != NULL && pbm->mac != NULL) {
+    CRMFerr(CRMF_F_OSSL_CRMF_PBM_NEW, error);
+    if (pbmp != NULL && pbmp->mac != NULL) {
         char buf[128];
-        if (OBJ_obj2txt(buf, sizeof(buf), pbm->mac->algorithm, 0))
+        if (OBJ_obj2txt(buf, sizeof(buf), pbmp->mac->algorithm, 0))
             ERR_add_error_data(1, buf);
     }
     return 0;
